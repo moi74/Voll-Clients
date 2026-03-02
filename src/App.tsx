@@ -65,19 +65,31 @@ interface ServiceRequest {
   student?: Student;
 }
 
+interface FinancialMovement {
+  id: number;
+  description: string;
+  amount: number;
+  movement_type: 'income' | 'expense';
+  movement_date: string;
+  created_at: string;
+}
+
 type View = 'dashboard' | 'students' | 'agenda' | 'finance';
 
 export default function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
+  const [financialMovements, setFinancialMovements] = useState<FinancialMovement[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isAgendaModalOpen, setIsAgendaModalOpen] = useState(false);
+  const [isFinanceModalOpen, setIsFinanceModalOpen] = useState(false);
   const [isEditStatusModalOpen, setIsEditStatusModalOpen] = useState(false);
   const [editingRequest, setEditingRequest] = useState<ServiceRequest | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [filterStatus, setFilterStatus] = useState<string>('Todos');
+  const [financeFilter, setFinanceFilter] = useState<string>('all');
   const [agendaSort, setAgendaSort] = useState<{ key: string; direction: 'asc' | 'desc' }>({
     key: 'scheduled_at',
     direction: 'asc'
@@ -98,10 +110,32 @@ export default function App() {
     status: 'pending'
   });
 
+  const [newFinancialMovement, setNewFinancialMovement] = useState({
+    description: '',
+    amount: '',
+    movement_type: 'income' as 'income' | 'expense',
+    movement_date: new Date().toISOString().split('T')[0]
+  });
+
   useEffect(() => {
     fetchStudents();
     fetchServiceRequests();
+    fetchFinancialMovements();
   }, []);
+
+  const fetchFinancialMovements = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('financial_movements')
+        .select('*')
+        .order('movement_date', { ascending: false });
+
+      if (error) throw error;
+      setFinancialMovements(data || []);
+    } catch (error) {
+      console.error('Error fetching financial movements:', error);
+    }
+  };
 
   const fetchServiceRequests = async () => {
     try {
@@ -130,6 +164,49 @@ export default function App() {
       console.error('Error fetching students:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleAddFinancialMovement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const { data, error } = await supabase
+        .from('financial_movements')
+        .insert([{ 
+          ...newFinancialMovement, 
+          amount: parseFloat(newFinancialMovement.amount) 
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+      if (data) {
+        setFinancialMovements([data, ...financialMovements]);
+        setIsFinanceModalOpen(false);
+        setNewFinancialMovement({
+          description: '',
+          amount: '',
+          movement_type: 'income',
+          movement_date: new Date().toISOString().split('T')[0]
+        });
+      }
+    } catch (error) {
+      console.error('Error adding financial movement:', error);
+    }
+  };
+
+  const handleDeleteFinancialMovement = async (id: number) => {
+    if (!confirm('Tem certeza que deseja remover este lançamento?')) return;
+    try {
+      const { error } = await supabase
+        .from('financial_movements')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      setFinancialMovements(financialMovements.filter(fm => fm.id !== id));
+    } catch (error) {
+      console.error('Error deleting financial movement:', error);
     }
   };
 
@@ -356,7 +433,12 @@ export default function App() {
               active={currentView === 'agenda'} 
               onClick={() => setCurrentView('agenda')}
             />
-            <NavItem icon={<TrendingUp size={20} />} label="Financeiro" disabled />
+            <NavItem 
+              icon={<TrendingUp size={20} />} 
+              label="Financeiro" 
+              active={currentView === 'finance'} 
+              onClick={() => setCurrentView('finance')}
+            />
           </nav>
         </div>
         
@@ -386,6 +468,8 @@ export default function App() {
               onClick={() => {
                 if (currentView === 'agenda') {
                   setIsAgendaModalOpen(true);
+                } else if (currentView === 'finance') {
+                  setIsFinanceModalOpen(true);
                 } else {
                   setIsModalOpen(true);
                 }
@@ -396,6 +480,11 @@ export default function App() {
                 <>
                   <Calendar size={18} />
                   Novo Agendamento
+                </>
+              ) : currentView === 'finance' ? (
+                <>
+                  <Plus size={18} />
+                  Novo Lançamento
                 </>
               ) : (
                 <>
@@ -640,6 +729,112 @@ export default function App() {
                                     onClick={() => handleDeleteServiceRequest(request.id)}
                                     className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
                                     title="Remover Agendamento"
+                                  >
+                                    <Trash2 size={18} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </motion.div>
+            ) : currentView === 'finance' ? (
+              <motion.div
+                key="finance"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+              >
+                <div className="mb-8 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800 mb-1">Financeiro</h2>
+                    <p className="text-slate-500 text-sm">Controle de entradas e saídas do studio.</p>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                    <h3 className="font-bold text-slate-800">Movimentações Financeiras</h3>
+                    <div className="flex gap-2">
+                      {[
+                        { id: 'all', label: 'Todos' },
+                        { id: 'income', label: 'Entradas' },
+                        { id: 'expense', label: 'Saídas' }
+                      ].map(filter => (
+                        <button 
+                          key={filter.id}
+                          onClick={() => setFinanceFilter(filter.id)}
+                          className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+                            financeFilter === filter.id 
+                              ? 'bg-emerald-600 text-white' 
+                              : 'text-slate-400 hover:bg-slate-50'
+                          }`}
+                        >
+                          {filter.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider">
+                          <th className="px-6 py-4 font-semibold">Descrição</th>
+                          <th className="px-6 py-4 font-semibold">Tipo</th>
+                          <th className="px-6 py-4 font-semibold">Valor</th>
+                          <th className="px-6 py-4 font-semibold">Data</th>
+                          <th className="px-6 py-4 font-semibold text-right">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {financialMovements
+                          .filter(fm => financeFilter === 'all' || fm.movement_type === financeFilter)
+                          .length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="px-6 py-12 text-center text-slate-400">Nenhuma movimentação encontrada.</td>
+                          </tr>
+                        ) : (
+                          financialMovements
+                            .filter(fm => financeFilter === 'all' || fm.movement_type === financeFilter)
+                            .map((movement) => (
+                            <tr key={movement.id} className="hover:bg-slate-50/50 transition-colors group">
+                              <td className="px-6 py-4">
+                                <p className="font-semibold text-slate-800">{movement.description}</p>
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                  movement.movement_type === 'income' 
+                                    ? 'bg-emerald-100 text-emerald-700' 
+                                    : 'bg-red-100 text-red-700'
+                                }`}>
+                                  {movement.movement_type === 'income' ? 'Entrada' : 'Saída'}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className={`text-sm font-bold ${
+                                  movement.movement_type === 'income' ? 'text-emerald-600' : 'text-red-600'
+                                }`}>
+                                  {movement.movement_type === 'income' ? '+' : '-'} 
+                                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(movement.amount)}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className="text-sm text-slate-600">
+                                  {new Date(movement.movement_date).toLocaleDateString('pt-BR')}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 text-right">
+                                <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button 
+                                    onClick={() => handleDeleteFinancialMovement(movement.id)}
+                                    className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                                    title="Remover Lançamento"
                                   >
                                     <Trash2 size={18} />
                                   </button>
@@ -1041,6 +1236,102 @@ export default function App() {
                   </button>
                 </div>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Add Financial Movement Modal */}
+      <AnimatePresence>
+        {isFinanceModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsFinanceModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 20 }}
+              className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                <h3 className="text-xl font-bold text-slate-800">Novo Lançamento</h3>
+                <button onClick={() => setIsFinanceModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <form onSubmit={handleAddFinancialMovement} className="p-6 space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Descrição</label>
+                  <input 
+                    required
+                    type="text" 
+                    className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                    placeholder="Ex: Mensalidade Aluno X"
+                    value={newFinancialMovement.description}
+                    onChange={e => setNewFinancialMovement({...newFinancialMovement, description: e.target.value})}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Valor (R$)</label>
+                    <input 
+                      required
+                      type="number" 
+                      step="0.01"
+                      className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                      placeholder="0,00"
+                      value={newFinancialMovement.amount}
+                      onChange={e => setNewFinancialMovement({...newFinancialMovement, amount: e.target.value})}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Data</label>
+                    <input 
+                      required
+                      type="date" 
+                      className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                      value={newFinancialMovement.movement_date}
+                      onChange={e => setNewFinancialMovement({...newFinancialMovement, movement_date: e.target.value})}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Tipo de Movimentação</label>
+                  <div className="flex gap-2">
+                    {[
+                      { id: 'income', label: 'Entrada' },
+                      { id: 'expense', label: 'Saída' }
+                    ].map(type => (
+                      <button
+                        key={type.id}
+                        type="button"
+                        onClick={() => setNewFinancialMovement({...newFinancialMovement, movement_type: type.id as 'income' | 'expense'})}
+                        className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                          newFinancialMovement.movement_type === type.id 
+                            ? (type.id === 'income' ? 'bg-emerald-600 text-white shadow-md' : 'bg-red-600 text-white shadow-md')
+                            : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                        }`}
+                      >
+                        {type.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="pt-4">
+                  <button 
+                    type="submit"
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-emerald-200"
+                  >
+                    Salvar Lançamento
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}
