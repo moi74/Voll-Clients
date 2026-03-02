@@ -27,6 +27,7 @@ import {
   ArrowDownRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { supabase } from './lib/supabase';
 import { 
   BarChart, 
   Bar, 
@@ -72,13 +73,31 @@ export default function App() {
 
   useEffect(() => {
     fetchStudents();
+    fetchCustomers();
   }, []);
+
+  const fetchCustomers = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('customers')
+        .select('*');
+      
+      if (error) throw error;
+      console.log('Customers found in Supabase:', data);
+    } catch (error) {
+      console.error('Error fetching customers:', error);
+    }
+  };
 
   const fetchStudents = async () => {
     try {
-      const response = await fetch('/api/students');
-      const data = await response.json();
-      setStudents(data);
+      const { data, error } = await supabase
+        .from('students')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setStudents(data || []);
     } catch (error) {
       console.error('Error fetching students:', error);
     } finally {
@@ -89,13 +108,15 @@ export default function App() {
   const handleAddStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const response = await fetch('/api/students', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newStudent)
-      });
-      if (response.ok) {
-        fetchStudents();
+      const { data, error } = await supabase
+        .from('students')
+        .insert([{ ...newStudent }])
+        .select()
+        .single();
+
+      if (error) throw error;
+      if (data) {
+        setStudents([data, ...students]);
         setIsModalOpen(false);
         setNewStudent({ name: '', email: '', phone: '', plan: 'Mensal', status: 'Ativo' });
       }
@@ -107,10 +128,13 @@ export default function App() {
   const handleDeleteStudent = async (id: number) => {
     if (!confirm('Tem certeza que deseja remover este aluno?')) return;
     try {
-      const response = await fetch(`/api/students/${id}`, { method: 'DELETE' });
-      if (response.ok) {
-        setStudents(students.filter(s => s.id !== id));
-      }
+      const { error } = await supabase
+        .from('students')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      setStudents(students.filter(s => s.id !== id));
     } catch (error) {
       console.error('Error deleting student:', error);
     }
@@ -132,15 +156,29 @@ export default function App() {
     inactive: students.filter(s => s.status === 'Inativo').length,
   }), [students]);
 
-  // Chart Data
+  // Chart Data - Real growth based on registration dates
   const chartData = useMemo(() => {
-    const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun'];
-    return months.map((m, i) => ({
-      name: m,
-      alunos: Math.floor(Math.random() * 20) + stats.total - (5 - i),
-      receita: (Math.floor(Math.random() * 20) + stats.total - (5 - i)) * 250
-    }));
-  }, [stats.total]);
+    const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const now = new Date();
+    const last6Months = [];
+
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const monthName = months[d.getMonth()];
+      const year = d.getFullYear();
+      
+      // Count students registered up to the end of this month
+      const endOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
+      const count = students.filter(s => new Date(s.created_at) <= endOfMonth).length;
+      
+      last6Months.push({
+        name: monthName,
+        alunos: count,
+        fullDate: `${monthName}/${year}`
+      });
+    }
+    return last6Months;
+  }, [students]);
 
   const planData = useMemo(() => {
     const counts = students.reduce((acc: any, s) => {

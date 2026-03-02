@@ -1,37 +1,20 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import Database from "better-sqlite3";
+import { createClient } from "@supabase/supabase-js";
 import path from "path";
+import dotenv from "dotenv";
 
-const db = new Database("pilates.db");
+dotenv.config();
 
-// Initialize database
-db.exec(`
-  CREATE TABLE IF NOT EXISTS students (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT,
-    phone TEXT,
-    status TEXT DEFAULT 'Ativo',
-    plan TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`);
+// Supabase client initialization
+const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "";
 
-// Seed data if empty
-const count = db.prepare("SELECT COUNT(*) as count FROM students").get() as { count: number };
-if (count.count === 0) {
-  const seedStudents = [
-    ['Ana Oliveira', 'ana@email.com', '(11) 98888-1111', 'Ativo', 'Anual'],
-    ['Bruno Santos', 'bruno@email.com', '(11) 98888-2222', 'Ativo', 'Mensal'],
-    ['Carla Lima', 'carla@email.com', '(11) 98888-3333', 'Experimental', 'Trimestral'],
-    ['Daniel Costa', 'daniel@email.com', '(11) 98888-4444', 'Ativo', 'Semestral'],
-    ['Elena Rocha', 'elena@email.com', '(11) 98888-5555', 'Inativo', 'Mensal'],
-  ];
-
-  const insert = db.prepare("INSERT INTO students (name, email, phone, status, plan) VALUES (?, ?, ?, ?, ?)");
-  seedStudents.forEach(s => insert.run(...s));
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.warn("Supabase credentials missing. API routes will fail until configured.");
 }
+
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 async function startServer() {
   const app = express();
@@ -40,24 +23,53 @@ async function startServer() {
   app.use(express.json());
 
   // API Routes
-  app.get("/api/students", (req, res) => {
-    const students = db.prepare("SELECT * FROM students ORDER BY created_at DESC").all();
-    res.json(students);
+  app.get("/api/students", async (req, res) => {
+    try {
+      const { data, error } = await supabase
+        .from("students")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      console.log(data)
+
+      if (error) throw error;
+      res.json(data || []);
+    } catch (error: any) {
+      console.error("Error fetching students:", error);
+      res.status(500).json({ error: error.message });
+    }
   });
 
-  app.post("/api/students", (req, res) => {
-    const { name, email, phone, status, plan } = req.body;
-    const info = db.prepare(
-      "INSERT INTO students (name, email, phone, status, plan) VALUES (?, ?, ?, ?, ?)"
-    ).run(name, email, phone, status || 'Ativo', plan);
-    
-    const newStudent = db.prepare("SELECT * FROM students WHERE id = ?").get(info.lastInsertRowid);
-    res.status(201).json(newStudent);
+  app.post("/api/students", async (req, res) => {
+    try {
+      const { name, email, phone, status, plan } = req.body;
+      const { data, error } = await supabase
+        .from("students")
+        .insert([{ name, email, phone, status: status || "Ativo", plan }])
+        .select()
+        .single();
+
+      if (error) throw error;
+      res.status(201).json(data);
+    } catch (error: any) {
+      console.error("Error adding student:", error);
+      res.status(500).json({ error: error.message });
+    }
   });
 
-  app.delete("/api/students/:id", (req, res) => {
-    db.prepare("DELETE FROM students WHERE id = ?").run(req.params.id);
-    res.status(204).send();
+  app.delete("/api/students/:id", async (req, res) => {
+    try {
+      const { error } = await supabase
+        .from("students")
+        .delete()
+        .eq("id", req.params.id);
+
+      if (error) throw error;
+      res.status(204).send();
+    } catch (error: any) {
+      console.error("Error deleting student:", error);
+      res.status(500).json({ error: error.message });
+    }
   });
 
   // Vite middleware for development
@@ -75,7 +87,7 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`VOLL Candidate running on http://localhost:${PORT}`);
+    console.log(`VOLL Candidate (Supabase) running on http://localhost:${PORT}`);
   });
 }
 
