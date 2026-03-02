@@ -22,9 +22,12 @@ import {
   Plus,
   X,
   Trash2,
+  Edit2,
   Filter,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from './lib/supabase';
@@ -53,15 +56,33 @@ interface Student {
   created_at: string;
 }
 
+interface ServiceRequest {
+  id: number;
+  scheduled_at: string;
+  status: string;
+  created_at: string;
+  student_id: number;
+  student?: Student;
+}
+
 type View = 'dashboard' | 'students' | 'agenda' | 'finance';
 
 export default function App() {
   const [students, setStudents] = useState<Student[]>([]);
+  const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isAgendaModalOpen, setIsAgendaModalOpen] = useState(false);
+  const [isEditStatusModalOpen, setIsEditStatusModalOpen] = useState(false);
+  const [editingRequest, setEditingRequest] = useState<ServiceRequest | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [filterStatus, setFilterStatus] = useState<string>('Todos');
+  const [agendaSort, setAgendaSort] = useState<{ key: string; direction: 'asc' | 'desc' }>({
+    key: 'scheduled_at',
+    direction: 'asc'
+  });
+  const [agendaFilter, setAgendaFilter] = useState<string>('all');
   
   const [newStudent, setNewStudent] = useState({
     name: '',
@@ -71,21 +92,28 @@ export default function App() {
     status: 'Ativo'
   });
 
+  const [newServiceRequest, setNewServiceRequest] = useState({
+    student_id: '',
+    scheduled_at: '',
+    status: 'pending'
+  });
+
   useEffect(() => {
     fetchStudents();
-    fetchCustomers();
+    fetchServiceRequests();
   }, []);
 
-  const fetchCustomers = async () => {
+  const fetchServiceRequests = async () => {
     try {
       const { data, error } = await supabase
-        .from('customers')
-        .select('*');
-      
+        .from('service_requests')
+        .select('*, student:students(*)')
+        .order('scheduled_at', { ascending: true });
+
       if (error) throw error;
-      console.log('Customers found in Supabase:', data);
+      setServiceRequests(data || []);
     } catch (error) {
-      console.error('Error fetching customers:', error);
+      console.error('Error fetching service requests:', error);
     }
   };
 
@@ -125,6 +153,65 @@ export default function App() {
     }
   };
 
+  const handleAddServiceRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const { data, error } = await supabase
+        .from('service_requests')
+        .insert([{ 
+          student_id: parseInt(newServiceRequest.student_id),
+          scheduled_at: newServiceRequest.scheduled_at,
+          status: newServiceRequest.status
+        }])
+        .select('*, student:students(*)')
+        .single();
+
+      if (error) throw error;
+      if (data) {
+        setServiceRequests([...serviceRequests, data]);
+        setIsAgendaModalOpen(false);
+        setNewServiceRequest({ student_id: '', scheduled_at: '', status: 'pending' });
+      }
+    } catch (error) {
+      console.error('Error adding service request:', error);
+    }
+  };
+
+  const handleDeleteServiceRequest = async (id: number) => {
+    if (!confirm('Tem certeza que deseja remover este agendamento?')) return;
+    try {
+      const { error } = await supabase
+        .from('service_requests')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      setServiceRequests(serviceRequests.filter(sr => sr.id !== id));
+    } catch (error) {
+      console.error('Error deleting service request:', error);
+    }
+  };
+
+  const handleUpdateServiceRequestStatus = async (id: number, newStatus: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('service_requests')
+        .update({ status: newStatus })
+        .eq('id', id)
+        .select('*, student:students(*)')
+        .single();
+
+      if (error) throw error;
+      if (data) {
+        setServiceRequests(serviceRequests.map(sr => sr.id === id ? data : sr));
+        setIsEditStatusModalOpen(false);
+        setEditingRequest(null);
+      }
+    } catch (error) {
+      console.error('Error updating service request status:', error);
+    }
+  };
+
   const handleDeleteStudent = async (id: number) => {
     if (!confirm('Tem certeza que deseja remover este aluno?')) return;
     try {
@@ -138,6 +225,56 @@ export default function App() {
     } catch (error) {
       console.error('Error deleting student:', error);
     }
+  };
+
+  const filteredServiceRequests = useMemo(() => {
+    let items = [...serviceRequests];
+    
+    if (agendaFilter !== 'all') {
+      if (agendaFilter === 'today') {
+        const today = new Date().toDateString();
+        items = items.filter(sr => new Date(sr.scheduled_at).toDateString() === today);
+      } else {
+        items = items.filter(sr => sr.status === agendaFilter);
+      }
+    }
+
+    if (agendaSort.key !== null) {
+      items.sort((a, b) => {
+        let aValue: any;
+        let bValue: any;
+
+        if (agendaSort.key === 'student') {
+          aValue = a.student?.name || '';
+          bValue = b.student?.name || '';
+        } else {
+          aValue = (a as any)[agendaSort.key];
+          bValue = (b as any)[agendaSort.key];
+        }
+
+        if (aValue < bValue) {
+          return agendaSort.direction === 'asc' ? -1 : 1;
+        }
+        if (aValue > bValue) {
+          return agendaSort.direction === 'asc' ? 1 : -1;
+        }
+        return 0;
+      });
+    }
+    return items;
+  }, [serviceRequests, agendaSort, agendaFilter]);
+
+  const handleAgendaSort = (key: string) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (agendaSort.key === key && agendaSort.direction === 'asc') {
+      direction = 'desc';
+    }
+    setAgendaSort({ key, direction });
+  };
+
+  const SortIcon = ({ column }: { column: string }) => {
+    if (agendaSort.key !== column) return <Filter size={12} className="opacity-20" />;
+    return agendaSort.direction === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />;
   };
 
   const filteredStudents = useMemo(() => {
@@ -213,7 +350,12 @@ export default function App() {
               active={currentView === 'students'} 
               onClick={() => setCurrentView('students')}
             />
-            <NavItem icon={<Calendar size={20} />} label="Agenda" disabled />
+            <NavItem 
+              icon={<Calendar size={20} />} 
+              label="Agenda" 
+              active={currentView === 'agenda'} 
+              onClick={() => setCurrentView('agenda')}
+            />
             <NavItem icon={<TrendingUp size={20} />} label="Financeiro" disabled />
           </nav>
         </div>
@@ -241,11 +383,26 @@ export default function App() {
           
           <div className="flex items-center gap-4">
             <button 
-              onClick={() => setIsModalOpen(true)}
+              onClick={() => {
+                if (currentView === 'agenda') {
+                  setIsAgendaModalOpen(true);
+                } else {
+                  setIsModalOpen(true);
+                }
+              }}
               className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm"
             >
-              <UserPlus size={18} />
-              Novo Aluno
+              {currentView === 'agenda' ? (
+                <>
+                  <Calendar size={18} />
+                  Novo Agendamento
+                </>
+              ) : (
+                <>
+                  <UserPlus size={18} />
+                  Novo Aluno
+                </>
+              )}
             </button>
           </div>
         </header>
@@ -363,6 +520,136 @@ export default function App() {
                         </div>
                       ))}
                     </div>
+                  </div>
+                </div>
+              </motion.div>
+            ) : currentView === 'agenda' ? (
+              <motion.div
+                key="agenda"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+              >
+                <div className="mb-8 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800 mb-1">Agenda de Serviços</h2>
+                    <p className="text-slate-500 text-sm">Gerencie os agendamentos e horários dos alunos.</p>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                    <h3 className="font-bold text-slate-800">Próximos Agendamentos</h3>
+                    <div className="flex gap-2">
+                      {[
+                        { id: 'all', label: 'Todos' },
+                        { id: 'today', label: 'Hoje' },
+                        { id: 'pending', label: 'Agendados' },
+                        { id: 'completed', label: 'Realizados' },
+                        { id: 'canceled', label: 'Cancelados' }
+                      ].map(filter => (
+                        <button 
+                          key={filter.id}
+                          onClick={() => setAgendaFilter(filter.id)}
+                          className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+                            agendaFilter === filter.id 
+                              ? 'bg-emerald-600 text-white' 
+                              : 'text-slate-400 hover:bg-slate-50'
+                          }`}
+                        >
+                          {filter.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider">
+                          <th 
+                            className="px-6 py-4 font-semibold cursor-pointer hover:bg-slate-100 transition-colors"
+                            onClick={() => handleAgendaSort('student')}
+                          >
+                            <div className="flex items-center gap-2">
+                              Aluno <SortIcon column="student" />
+                            </div>
+                          </th>
+                          <th 
+                            className="px-6 py-4 font-semibold cursor-pointer hover:bg-slate-100 transition-colors"
+                            onClick={() => handleAgendaSort('scheduled_at')}
+                          >
+                            <div className="flex items-center gap-2">
+                              Data e Hora <SortIcon column="scheduled_at" />
+                            </div>
+                          </th>
+                          <th 
+                            className="px-6 py-4 font-semibold cursor-pointer hover:bg-slate-100 transition-colors"
+                            onClick={() => handleAgendaSort('status')}
+                          >
+                            <div className="flex items-center gap-2">
+                              Status <SortIcon column="status" />
+                            </div>
+                          </th>
+                          <th className="px-6 py-4 font-semibold text-right">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredServiceRequests.length === 0 ? (
+                          <tr>
+                            <td colSpan={4} className="px-6 py-12 text-center text-slate-400">Nenhum agendamento encontrado.</td>
+                          </tr>
+                        ) : (
+                          filteredServiceRequests.map((request) => (
+                            <tr key={request.id} className="hover:bg-slate-50/50 transition-colors group">
+                              <td className="px-6 py-4">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs">
+                                    {request.student?.name.charAt(0) || '?'}
+                                  </div>
+                                  <p className="font-semibold text-slate-800">{request.student?.name || 'Aluno Removido'}</p>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="flex flex-col">
+                                  <span className="text-sm font-medium text-slate-800">
+                                    {new Date(request.scheduled_at).toLocaleDateString('pt-BR')}
+                                  </span>
+                                  <span className="text-xs text-slate-500">
+                                    {new Date(request.scheduled_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4">
+                                <StatusBadge status={request.status} />
+                              </td>
+                              <td className="px-6 py-4 text-right">
+                                <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button 
+                                    onClick={() => {
+                                      setEditingRequest(request);
+                                      setIsEditStatusModalOpen(true);
+                                    }}
+                                    className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all"
+                                    title="Editar Status"
+                                  >
+                                    <Edit2 size={18} />
+                                  </button>
+                                  <button 
+                                    onClick={() => handleDeleteServiceRequest(request.id)}
+                                    className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                                    title="Remover Agendamento"
+                                  >
+                                    <Trash2 size={18} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </motion.div>
@@ -566,7 +853,7 @@ export default function App() {
                         type="button"
                         onClick={() => setNewStudent({...newStudent, status})}
                         className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
-                          newStudent.status === status 
+                           newStudent.status === status 
                             ? 'bg-emerald-600 text-white shadow-md' 
                             : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                         }`}
@@ -587,6 +874,173 @@ export default function App() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Add Agenda Modal */}
+      <AnimatePresence>
+        {isAgendaModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsAgendaModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 20 }}
+              className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                <h3 className="text-xl font-bold text-slate-800">Novo Agendamento</h3>
+                <button onClick={() => setIsAgendaModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <form onSubmit={handleAddServiceRequest} className="p-6 space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Aluno</label>
+                  <select 
+                    required
+                    className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                    value={newServiceRequest.student_id}
+                    onChange={e => setNewServiceRequest({...newServiceRequest, student_id: e.target.value})}
+                  >
+                    <option value="">Selecione um aluno</option>
+                    {students.map(student => (
+                      <option key={student.id} value={student.id}>{student.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Data e Hora</label>
+                  <input 
+                    required
+                    type="datetime-local" 
+                    className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                    value={newServiceRequest.scheduled_at}
+                    onChange={e => setNewServiceRequest({...newServiceRequest, scheduled_at: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Status</label>
+                  <div className="flex gap-2">
+                    {[
+                      { id: 'pending', label: 'Agendado' },
+                      { id: 'completed', label: 'Realizado' },
+                      { id: 'canceled', label: 'Cancelado' }
+                    ].map(status => (
+                      <button
+                        key={status.id}
+                        type="button"
+                        onClick={() => setNewServiceRequest({...newServiceRequest, status: status.id})}
+                        className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                          newServiceRequest.status === status.id 
+                            ? 'bg-emerald-600 text-white shadow-md' 
+                            : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                        }`}
+                      >
+                        {status.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                
+                <div className="pt-4">
+                  <button 
+                    type="submit"
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2"
+                  >
+                    <Calendar size={20} />
+                    Agendar Serviço
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Service Request Status Modal */}
+      <AnimatePresence>
+        {isEditStatusModalOpen && editingRequest && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                setIsEditStatusModalOpen(false);
+                setEditingRequest(null);
+              }}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 20 }}
+              className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-800">Editar Status</h3>
+                  <p className="text-xs text-slate-500">Agendamento de {editingRequest.student?.name}</p>
+                </div>
+                <button 
+                  onClick={() => {
+                    setIsEditStatusModalOpen(false);
+                    setEditingRequest(null);
+                  }} 
+                  className="text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <div className="p-6 space-y-6">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-3">Selecione o novo status</label>
+                  <div className="grid grid-cols-1 gap-3">
+                    {[
+                      { id: 'pending', label: 'Agendado', color: 'blue' },
+                      { id: 'completed', label: 'Realizado', color: 'emerald' },
+                      { id: 'canceled', label: 'Cancelado', color: 'red' }
+                    ].map(status => (
+                      <button
+                        key={status.id}
+                        type="button"
+                        onClick={() => handleUpdateServiceRequestStatus(editingRequest.id, status.id)}
+                        className={`w-full py-4 rounded-xl text-sm font-bold transition-all flex items-center justify-between px-6 border-2 ${
+                          editingRequest.status === status.id 
+                            ? `border-${status.color}-600 bg-${status.color}-50 text-${status.color}-700 shadow-sm` 
+                            : 'border-slate-100 bg-slate-50 text-slate-500 hover:border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span>{status.label}</span>
+                        {editingRequest.status === status.id && <CheckCircle2 size={18} />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                
+                <div className="pt-2">
+                  <button 
+                    onClick={() => {
+                      setIsEditStatusModalOpen(false);
+                      setEditingRequest(null);
+                    }}
+                    className="w-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-all"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
             </motion.div>
           </div>
         )}
@@ -640,11 +1094,20 @@ function StatusBadge({ status }: { status: string }) {
     'Ativo': 'bg-emerald-100 text-emerald-700',
     'Experimental': 'bg-amber-100 text-amber-700',
     'Inativo': 'bg-slate-100 text-slate-700',
+    'pending': 'bg-blue-100 text-blue-700',
+    'completed': 'bg-emerald-100 text-emerald-700',
+    'canceled': 'bg-red-100 text-red-700',
   }[status] || 'bg-slate-100 text-slate-700';
+
+  const labels: Record<string, string> = {
+    'pending': 'Agendado',
+    'completed': 'Realizado',
+    'canceled': 'Cancelado'
+  };
 
   return (
     <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${styles}`}>
-      {status}
+      {labels[status] || status}
     </span>
   );
 }
